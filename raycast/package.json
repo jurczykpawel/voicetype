@@ -6,7 +6,7 @@
   "icon": "command-icon.png",
   "author": "jurczykpawel",
   "categories": ["Productivity", "Applications"],
-  "license": "MIT",
+  "license": "SEE LICENSE IN ../LICENSE",
   "commands": [
     {
       "name": "toggle",
@@ -71,8 +71,9 @@
     "typescript": "^5.7.0"
   },
   "scripts": {
-    "build": "ray build",
-    "dev": "ray develop",
+    "sync-engine": "cp ../engine/voice-type.sh assets/voice-type.sh && chmod +x assets/voice-type.sh",
+    "build": "npm run sync-engine && ray build",
+    "dev": "npm run sync-engine && ray develop",
     "lint": "ray lint",
     "fix-lint": "ray lint --fix",
     "publish": "ray publish"
