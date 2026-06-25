@@ -1,0 +1,80 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "voicetype",
+  "title": "VoiceType",
+  "description": "Free local dictation — record, transcribe with whisper.cpp, paste at cursor. Offline alternative to SuperWhisper.",
+  "icon": "command-icon.png",
+  "author": "jurczykpawel",
+  "categories": ["Productivity", "Applications"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "toggle",
+      "title": "Toggle Dictation",
+      "subtitle": "VoiceType",
+      "description": "Start recording, or stop + transcribe + paste at cursor.",
+      "mode": "no-view"
+    },
+    {
+      "name": "history",
+      "title": "Dictation History",
+      "subtitle": "VoiceType",
+      "description": "Search past transcripts and re-paste or copy them.",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "language",
+      "title": "Language",
+      "description": "Whisper language code (pl, en, auto…).",
+      "type": "textfield",
+      "default": "pl",
+      "required": false
+    },
+    {
+      "name": "mic",
+      "title": "Microphone",
+      "description": "ffmpeg avfoundation device, e.g. :default or :1",
+      "type": "textfield",
+      "default": ":default",
+      "required": false
+    },
+    {
+      "name": "model",
+      "title": "Model path",
+      "description": "Path to ggml whisper model.",
+      "type": "textfield",
+      "default": "~/.local/share/whisper-cpp/ggml-large-v3-turbo.bin",
+      "required": false
+    },
+    {
+      "name": "paste",
+      "title": "Auto-paste",
+      "label": "Paste transcript at cursor (Cmd+V)",
+      "description": "When on, the transcript is pasted into the focused app. When off, it only lands on the clipboard.",
+      "type": "checkbox",
+      "default": true,
+      "required": false
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.99.0",
+    "@raycast/utils": "^1.19.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.7.0"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "lint": "ray lint",
+    "fix-lint": "ray lint --fix",
+    "publish": "ray publish"
+  }
+}
