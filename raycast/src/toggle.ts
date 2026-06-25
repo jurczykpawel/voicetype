@@ -13,9 +13,16 @@ import { join } from "node:path";
 const exec = promisify(execFile);
 
 interface Prefs {
+  backend: string;
   language: string;
   mic: string;
+  prompt: string;
   model: string;
+  cloudKey: string;
+  cloudUrl: string;
+  cloudModel: string;
+  deepgramKey: string;
+  elevenlabsKey: string;
   paste: boolean;
 }
 
@@ -69,11 +76,18 @@ export default async function Command() {
 
   const env = {
     ...process.env,
-    PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH ?? ""}`,
+    PATH: `/opt/homebrew/bin:/usr/local/bin:${join(homedir(), ".local/bin")}:${process.env.PATH ?? ""}`,
     VOICETYPE_DIR: WORKDIR,
+    VOICETYPE_BACKEND: prefs.backend || "local",
     VOICETYPE_LANG: prefs.language || "pl",
     VOICETYPE_MIC: prefs.mic || ":default",
+    VOICETYPE_PROMPT: prefs.prompt || "",
     VOICETYPE_MODEL: expand(prefs.model),
+    VOICETYPE_CLOUD_KEY: prefs.cloudKey || "",
+    VOICETYPE_CLOUD_URL: prefs.cloudUrl || "",
+    VOICETYPE_CLOUD_MODEL: prefs.cloudModel || "",
+    VOICETYPE_DEEPGRAM_KEY: prefs.deepgramKey || "",
+    VOICETYPE_ELEVENLABS_KEY: prefs.elevenlabsKey || "",
     VOICETYPE_PASTE: prefs.paste ? "1" : "0",
   };
 

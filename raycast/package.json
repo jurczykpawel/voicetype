@@ -6,7 +6,7 @@
   "icon": "command-icon.png",
   "author": "jurczykpawel",
   "categories": ["Productivity", "Applications"],
-  "license": "SEE LICENSE IN ../LICENSE",
+  "license": "SEE LICENSE IN LICENSE",
   "commands": [
     {
       "name": "toggle",
@@ -25,6 +25,21 @@
   ],
   "preferences": [
     {
+      "name": "backend",
+      "title": "Backend",
+      "description": "Which transcription engine to use.",
+      "type": "dropdown",
+      "default": "local",
+      "required": false,
+      "data": [
+        { "title": "Local — whisper.cpp (offline)", "value": "local" },
+        { "title": "Local — Parakeet v3 (offline, multilingual)", "value": "parakeet" },
+        { "title": "Cloud — OpenAI-compatible (Groq / OpenAI)", "value": "cloud" },
+        { "title": "Cloud — Deepgram", "value": "deepgram" },
+        { "title": "Cloud — ElevenLabs Scribe", "value": "elevenlabs" }
+      ]
+    },
+    {
       "name": "language",
       "title": "Language",
       "description": "Whisper language code (pl, en, auto…).",
@@ -41,11 +56,59 @@
       "required": false
     },
     {
+      "name": "prompt",
+      "title": "Custom vocabulary",
+      "description": "Optional prompt to bias spelling of names/terms, e.g. 'Raycast, whisper.cpp, Jurczyk'.",
+      "type": "textfield",
+      "default": "",
+      "required": false
+    },
+    {
       "name": "model",
-      "title": "Model path",
-      "description": "Path to ggml whisper model.",
+      "title": "Model path (local)",
+      "description": "Path to ggml whisper model. Used by the Local backend.",
       "type": "textfield",
       "default": "~/.local/share/whisper-cpp/ggml-large-v3-turbo.bin",
+      "required": false
+    },
+    {
+      "name": "cloudKey",
+      "title": "Cloud API key",
+      "description": "API key for the Cloud backend. Get a free one at console.groq.com.",
+      "type": "password",
+      "default": "",
+      "required": false
+    },
+    {
+      "name": "cloudUrl",
+      "title": "Cloud endpoint",
+      "description": "OpenAI-compatible /audio/transcriptions URL.",
+      "type": "textfield",
+      "default": "https://api.groq.com/openai/v1/audio/transcriptions",
+      "required": false
+    },
+    {
+      "name": "cloudModel",
+      "title": "Cloud model",
+      "description": "Transcription model for the Cloud backend.",
+      "type": "textfield",
+      "default": "whisper-large-v3-turbo",
+      "required": false
+    },
+    {
+      "name": "deepgramKey",
+      "title": "Deepgram API key",
+      "description": "API key for the Deepgram backend (console.deepgram.com).",
+      "type": "password",
+      "default": "",
+      "required": false
+    },
+    {
+      "name": "elevenlabsKey",
+      "title": "ElevenLabs API key",
+      "description": "API key for the ElevenLabs Scribe backend.",
+      "type": "password",
+      "default": "",
       "required": false
     },
     {
