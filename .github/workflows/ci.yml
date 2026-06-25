@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck scripts
+        run: shellcheck install.sh engine/voice-type.sh
+
+  powershell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse PowerShell (windows/)
+        shell: pwsh
+        run: |
+          $fail = $false
+          foreach ($f in Get-ChildItem windows -Filter *.ps1) {
+            $errs = $null; $toks = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$toks, [ref]$errs) | Out-Null
+            if ($errs) { $errs | ForEach-Object { Write-Host "$($f.Name) L$($_.Extent.StartLineNumber): $($_.Message)" }; $fail = $true }
+            else { Write-Host "$($f.Name): OK" }
+          }
+          if ($fail) { exit 1 }
+
+  raycast:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: raycast
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: raycast/package-lock.json
+      - run: npm ci
+      - name: Sync engine into assets
+        run: npm run sync-engine
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: ESLint
+        run: npx eslint src
+      - name: Prettier
+        run: npx prettier --check "src/**/*.{ts,tsx}"
