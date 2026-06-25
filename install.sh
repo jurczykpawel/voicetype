@@ -108,7 +108,9 @@ if [ "$WANT_PARAKEET" = 1 ]; then
   if command -v parakeet-mlx >/dev/null 2>&1; then
     ok "parakeet-mlx already installed"
   else
-    command -v pipx >/dev/null 2>&1 || { info "Installing pipx…"; brew install pipx && pipx ensurepath >/dev/null 2>&1 || true; }
+    if ! command -v pipx >/dev/null 2>&1; then
+      info "Installing pipx…"; brew install pipx; pipx ensurepath >/dev/null 2>&1 || true
+    fi
     info "Installing parakeet-mlx…"; pipx install parakeet-mlx || warn "parakeet-mlx install failed (set up manually)"
   fi
 fi
