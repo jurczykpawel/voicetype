@@ -16,6 +16,10 @@ Two ways to drive it, same engine:
 curl -fsSL https://raw.githubusercontent.com/jurczykpawel/voicetype/main/install.sh | bash
 ```
 
+> **Prefer to let an AI agent set it up?** Point Claude Code / Cursor at [`AGENTS.md`](AGENTS.md) —
+> it's a deterministic runbook (macOS + Windows) the agent can execute, doing everything except the
+> few GUI clicks (permissions + hotkey) it will explicitly ask you for.
+
 The installer **asks which backend you want**:
 
 1. **Whisper** — local, offline; installs `whisper-cpp` + downloads the `large-v3-turbo` model (~1.5 GB). _(default)_
