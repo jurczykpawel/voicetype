@@ -1,4 +1,4 @@
-<#
+﻿<#
   voice-type.ps1 — VoiceType engine for Windows (PowerShell). Toggle dictation.
 
   TOGGLE: first run  = start recording the microphone (ffmpeg/dshow).
@@ -163,9 +163,14 @@ function Test-Phantom($t) {
   return $ph -contains $n
 }
 
-# Does the installed whisper build understand --vad? (Silero VAD stops silence hallucinations.)
+# Does the installed whisper build understand --vad? (--help is empty on the Windows build, so we
+# scan the binary for the compiled-in option string — reliable and cheap.)
 function Test-WhisperVad {
-  try { return ((& $WhisperBin --help 2>&1 | Out-String) -match '--vad') } catch { return $false }
+  try {
+    $p = (Get-Command $WhisperBin -ErrorAction SilentlyContinue).Source
+    if (-not $p) { $p = $WhisperBin }
+    return [bool](Select-String -Path $p -Pattern 'vad-model' -SimpleMatch -ErrorAction SilentlyContinue)
+  } catch { return $false }
 }
 
 # Peak level (dB) of a wav via ffmpeg volumedetect; $null if unknown. Invariant parse (PL locale uses comma).

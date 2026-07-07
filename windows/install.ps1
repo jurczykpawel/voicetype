@@ -1,4 +1,4 @@
-<#
+﻿<#
   VoiceType installer for Windows (PowerShell).
 
     irm https://raw.githubusercontent.com/jurczykpawel/voicetype/main/windows/install.ps1 | iex
