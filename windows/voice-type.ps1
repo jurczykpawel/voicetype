@@ -105,7 +105,8 @@ function Get-DefaultMic {
 function Transcribe-Local {
   $of = Join-Path $WorkDir 'out'
   $a = @('-m', $Model, '-f', $Wav, '-l', $Lang, '-nt', '-np', '-otxt', '-of', $of)
-  if ((Test-Path $VadModel) -and (Test-WhisperVad)) { $a += @('--vad', '--vad-model', $VadModel) }
+  # pad 200ms: default 30ms clips short words ("w"/"z") at VAD segment edges
+  if ((Test-Path $VadModel) -and (Test-WhisperVad)) { $a += @('--vad', '--vad-model', $VadModel, '--vad-speech-pad-ms', '200') }
   if ($Prompt) { $a += @('--prompt', $Prompt) }
   & $WhisperBin @a *> $null
   Get-Content "$of.txt" -Raw -Encoding UTF8

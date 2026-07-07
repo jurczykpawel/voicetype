@@ -149,7 +149,8 @@ is_phantom() {
 # Transkrypcja lokalna (whisper.cpp) -> surowy tekst na stdout. VAD gdy model dostępny.
 transcribe_local() {
   local args=(-m "$MODEL" -f "$WAV" -l "$LANG_CODE" -nt -np -otxt -of "$OUT")
-  ensure_vad_model && args+=(--vad --vad-model "$VAD_MODEL")
+  # pad 200ms: default 30ms clips short words (single-letter "w"/"z") at segment edges
+  ensure_vad_model && args+=(--vad --vad-model "$VAD_MODEL" --vad-speech-pad-ms 200)
   [ -n "$PROMPT" ] && args+=(--prompt "$PROMPT")
   whisper-cli "${args[@]}" >/dev/null 2>&1
   cat "$OUT.txt" 2>/dev/null
