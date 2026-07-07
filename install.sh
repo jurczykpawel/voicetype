@@ -128,6 +128,20 @@ if [ "$WANT_WHISPER" = 1 ]; then
     mv "$MODEL_PATH.part" "$MODEL_PATH"
     ok "Model saved to $MODEL_PATH"
   fi
+  # VAD model (~0.9 MB) — stops Whisper from hallucinating phantom phrases on silence.
+  VAD_PATH="$MODEL_DIR/ggml-silero-v5.1.2.bin"
+  if [ -f "$VAD_PATH" ]; then
+    ok "VAD model present"
+  else
+    info "Downloading VAD model (~0.9 MB, one-time)…"
+    if curl -fsSL "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin" -o "$VAD_PATH.part"; then
+      mv "$VAD_PATH.part" "$VAD_PATH"
+      ok "VAD model saved"
+    else
+      rm -f "$VAD_PATH.part"
+      info "VAD download skipped (optional) — silence guard + phantom filter still active."
+    fi
+  fi
 fi
 
 # ── Engine + persistent default backend ───────────────────────────────────────

@@ -112,10 +112,11 @@ Set env vars in the Keyboard Maestro action, your shell, or Raycast preferences:
 |---|---|---|
 | `VOICETYPE_BACKEND` | `local` | `local` \| `parakeet` \| `cloud` \| `deepgram` \| `elevenlabs` |
 | `VOICETYPE_LANG` | `pl` | language code (`auto` = autodetect) |
-| `VOICETYPE_MIC` | `:default` | ffmpeg avfoundation device, e.g. `:1` (`ffmpeg -f avfoundation -list_devices true -i ""`) |
+| `VOICETYPE_MIC` | `:default` | avfoundation device. `:default` follows the macOS system default input, skipping silent virtual devices (Krisp/Teams/BlackHole/Loopback/RØDE Connect). Force one with an index `:1` or name `:MacBook Pro Microphone` (list: `ffmpeg -f avfoundation -list_devices true -i ""`) |
 | `VOICETYPE_PROMPT` | — | initial prompt / custom vocabulary (proper nouns, terms) |
 | `VOICETYPE_PASTE` | `1` | `0` = clipboard only, no auto-paste |
 | `VOICETYPE_MODEL` | `~/.local/share/whisper-cpp/ggml-large-v3-turbo.bin` | local: path to any ggml model |
+| `VOICETYPE_VAD_MODEL` | `~/.local/share/whisper-cpp/ggml-silero-v5.1.2.bin` | local: Silero VAD model (auto-downloaded, ~0.9 MB) — skips non-speech so Whisper can't hallucinate phantom phrases on silence |
 | `VOICETYPE_PARAKEET_MODEL` | `mlx-community/parakeet-tdt-0.6b-v3` | parakeet: HF model repo |
 | `VOICETYPE_CLOUD_URL` | Groq transcriptions URL | cloud: OpenAI-compatible endpoint |
 | `VOICETYPE_CLOUD_MODEL` | `whisper-large-v3-turbo` | cloud: transcription model |

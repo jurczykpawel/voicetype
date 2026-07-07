@@ -14,7 +14,12 @@
 #                         deepgram   — Deepgram Nova
 #                         elevenlabs — ElevenLabs Scribe
 #   VOICETYPE_LANG      język (domyślnie pl; 'auto' = autodetekcja)
-#   VOICETYPE_MIC       urządzenie ffmpeg avfoundation, np. ":1" lub ":default" (domyślnie :default)
+#   VOICETYPE_MIC       urządzenie ffmpeg avfoundation. Domyślnie ':default' = ŚLEDŹ systemowy
+#                       domyślny mikrofon (Ustawienia → Dźwięk → Wejście), z pominięciem niemych
+#                       urządzeń wirtualnych (Krisp/Teams/BlackHole/Loopback/RØDE Connect…).
+#                       Wymuszenie konkretnego: indeks ':1' albo nazwa ':MacBook Pro Microphone'.
+#                       (UWAGA: własne ':default' avfoundation to indeks [0] — często wirtualny,
+#                       niemy kanał → cisza → Whisper HALUCYNUJE. Dlatego wybieramy mic sami.)
 #   VOICETYPE_PROMPT    initial prompt / słownik nazw własnych (local + cloud OpenAI-compatible)
 #   VOICETYPE_PASTE     1 = auto-wklej (Cmd+V), 0 = zostaw tylko w schowku (domyślnie 1)
 #   VOICETYPE_DIR       katalog roboczy (domyślnie /tmp/voice-type)
@@ -51,6 +56,9 @@ PROMPT="${VOICETYPE_PROMPT:-}"
 PASTE="${VOICETYPE_PASTE:-1}"
 # local (whisper.cpp)
 MODEL="${VOICETYPE_MODEL:-$HOME/.local/share/whisper-cpp/ggml-large-v3-turbo.bin}"
+# VAD (Voice Activity Detection) — odcina fragmenty bez mowy, żeby Whisper nie halucynował na ciszy.
+VAD_MODEL="${VOICETYPE_VAD_MODEL:-$HOME/.local/share/whisper-cpp/ggml-silero-v5.1.2.bin}"
+VAD_URL="${VOICETYPE_VAD_URL:-https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin}"
 # parakeet (parakeet-mlx)
 PARAKEET_BIN="${VOICETYPE_PARAKEET_BIN:-parakeet-mlx}"
 PARAKEET_MODEL="${VOICETYPE_PARAKEET_MODEL:-mlx-community/parakeet-tdt-0.6b-v3}"
@@ -77,13 +85,73 @@ notify() { # $1 = treść, $2 = (opcjonalnie) nazwa dźwięku
 
 need_jq() { command -v jq >/dev/null 2>&1 || { notify "Brak jq (brew install jq)"; return 1; }; }
 
-# Transkrypcja lokalna (whisper.cpp) -> surowy tekst na stdout.
-transcribe_local() {
-  if [ -n "$PROMPT" ]; then
-    whisper-cli -m "$MODEL" -f "$WAV" -l "$LANG_CODE" -nt -np --prompt "$PROMPT" -otxt -of "$OUT" >/dev/null 2>&1
-  else
-    whisper-cli -m "$MODEL" -f "$WAV" -l "$LANG_CODE" -nt -np -otxt -of "$OUT" >/dev/null 2>&1
+# Wzorzec nazw "martwych" urządzeń wirtualnych/agregatowych — dają ciszę bez routingu w apce.
+VIRT_RE='Connect|BlackHole|Loopback|Aggregate|Multi-Output|VB-Cable|VB-Audio|Soundflower|Krisp|iShowU|Background Music'
+
+# Nazwa aktualnego systemowego domyślnego mikrofonu (macOS). Pusty = nie ustalono.
+# Preferuje SwitchAudioSource (szybki), fallback system_profiler (bez zależności).
+default_input_name() {
+  if command -v SwitchAudioSource >/dev/null 2>&1; then
+    SwitchAudioSource -c -t input 2>/dev/null && return
   fi
+  system_profiler SPAudioDataType 2>/dev/null | awk '
+    /^        [^ ].*:$/ { name=$0; sub(/^ +/,"",name); sub(/:$/,"",name) }
+    /Default Input Device: Yes/ { print name; exit }
+  '
+}
+
+# Auto-wybór REALNEGO mikrofonu dla MIC=':default' (uniwersalnie, nie pod jeden sprzęt):
+#   1) systemowy domyślny input — o ile to NIE martwe urządzenie wirtualne (macOS sam przełącza
+#      default na wpięty mic USB, więc zwykle wystarcza ten krok — "wpięty USB → USB");
+#   2) inaczej wbudowany mikrofon (zawsze ma sygnał; "odłączony → wbudowany");
+#   3) inaczej pierwszy nie-wirtualny input z listy. Pusto → wołający zostaje przy ':default'.
+resolve_auto_mic() {
+  local def list mbp real
+  def=$(default_input_name)
+  if [ -n "$def" ] && ! printf '%s' "$def" | grep -qiE "$VIRT_RE"; then
+    printf '%s' "$def"; return
+  fi
+  list=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 \
+         | sed -n '/audio devices/,$p' | sed -E 's/^.*\] \[[0-9]+\] //')
+  mbp=$(printf '%s\n' "$list" | grep -iE 'MacBook.*Microphone|Built-in.*Micro' | head -1)
+  if [ -n "$mbp" ]; then printf '%s' "$mbp"; return; fi
+  real=$(printf '%s\n' "$list" | grep -viE "$VIRT_RE" | grep -iE 'micro|mic|input|usb' | head -1)
+  if [ -n "$real" ]; then printf '%s' "$real"; return; fi
+  printf '%s' "$def"
+}
+
+# Ściąga model VAD raz (mały, ~0,9 MB). Marker .failed = nie próbuj w kółko gdy offline.
+ensure_vad_model() {
+  [ -f "$VAD_MODEL" ] && return 0
+  [ -f "$VAD_MODEL.failed" ] && return 1
+  mkdir -p "$(dirname "$VAD_MODEL")"
+  if curl -fsSL -o "$VAD_MODEL.part" "$VAD_URL" 2>/dev/null; then
+    mv "$VAD_MODEL.part" "$VAD_MODEL"
+  else
+    rm -f "$VAD_MODEL.part"; touch "$VAD_MODEL.failed"; return 1
+  fi
+}
+
+# Znane fantomy Whispera (zwrot z ciszy/szumu). Całe wyjście == fantom -> traktuj jak brak mowy.
+_phantom_norm() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/[.!?…]*$//' | tr '[:upper:]' '[:lower:]'; }
+is_phantom() {
+  case "$(_phantom_norm "$1")" in
+    "dziękuję za uwagę"|"dzięki za uwagę"|"dziękuję za oglądanie"|"dzięki za oglądanie"|\
+    "dziękuję za obejrzenie"|"dziękuję"|"dzięki"|"dziękuję za obejrzenie filmu"|\
+    "napisy stworzone przez społeczność amara.org"|"napisy: amara.org"|\
+    "zapraszam do subskrypcji"|"prosimy o subskrypcję"|"do zobaczenia"|\
+    "thank you for watching"|"thanks for watching"|"thank you"|"you"|"bye"|\
+    "subtitles by the amara.org community"|"please subscribe") return 0 ;;
+  esac
+  return 1
+}
+
+# Transkrypcja lokalna (whisper.cpp) -> surowy tekst na stdout. VAD gdy model dostępny.
+transcribe_local() {
+  local args=(-m "$MODEL" -f "$WAV" -l "$LANG_CODE" -nt -np -otxt -of "$OUT")
+  ensure_vad_model && args+=(--vad --vad-model "$VAD_MODEL")
+  [ -n "$PROMPT" ] && args+=(--prompt "$PROMPT")
+  whisper-cli "${args[@]}" >/dev/null 2>&1
   cat "$OUT.txt" 2>/dev/null
 }
 
@@ -144,7 +212,17 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; the
   rm -f "$PIDFILE"
 
   if [ ! -s "$WAV" ]; then notify "Brak nagrania 🤷"; exit 0; fi
-  notify "⏳ Transkrybuję…"
+
+  # Straż ciszy: martwe/wirtualne urządzenie (albo brak zgody na mikrofon) daje ~ -91 dB.
+  # Bez tego Whisper na ciszy HALUCYNUJE (klasyczne "Dziękuję za uwagę."). Próg -70 dB.
+  DEV_USED=$(cat "$WORKDIR/mic" 2>/dev/null || echo "${MIC#:}")
+  MAXVOL=$(ffmpeg -hide_banner -i "$WAV" -af volumedetect -f null - 2>&1 \
+           | sed -n 's/.*max_volume: \(-*[0-9.]*\) dB/\1/p')
+  if [ -n "$MAXVOL" ] && awk "BEGIN{exit !($MAXVOL < -70)}"; then
+    notify "🔇 Cisza z '$DEV_USED' (${MAXVOL} dB) — sprawdź mikrofon / zgodę na Mikrofon"
+    exit 0
+  fi
+  notify "⏳ Transkrybuję… (${DEV_USED})"
 
   case "$BACKEND" in
     parakeet)          RAW=$(transcribe_parakeet)   || exit 1 ;;
@@ -159,7 +237,9 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; the
          | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
          | sed '/^$/d' | paste -sd ' ' - | tr -s ' ')
 
-  if [ -z "$TEXT" ]; then notify "Nic nie rozpoznano 🤷"; exit 0; fi
+  # Całe wyjście to fantom Whispera z ciszy (VAD go zwykle ubija, to siatka bezpieczeństwa
+  # także dla backendów chmurowych bez VAD) -> nie wklejaj.
+  if [ -z "$TEXT" ] || is_phantom "$TEXT"; then notify "Nic nie rozpoznano 🤷"; exit 0; fi
 
   printf '%s' "$TEXT" | pbcopy
   if [ "$PASTE" = "1" ]; then
@@ -171,9 +251,16 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; the
 fi
 
 # ── Gałąź START: rozpocznij nagrywanie ───────────────────────────────────────
+# ':default' avfoundation = indeks [0] (często wirtualny, niemy), NIE systemowy default.
+# Auto-wybieramy realny mikrofon (wpięty USB → USB; odłączony → wbudowany) i podajemy po nazwie.
+if [ "$MIC" = ":default" ]; then
+  DEV_NAME=$(resolve_auto_mic)
+  if [ -n "$DEV_NAME" ]; then MIC=":$DEV_NAME"; fi
+fi
+printf '%s' "${MIC#:}" > "$WORKDIR/mic"   # zapamiętaj urządzenie dla gałęzi STOP
 rm -f "$WAV" "$OUT.txt" "$PIDFILE"
 nohup ffmpeg -nostdin -hide_banner -loglevel error \
   -f avfoundation -i "$MIC" -ar 16000 -ac 1 -y "$WAV" >/dev/null 2>&1 &
 echo $! > "$PIDFILE"
-notify "🎙️ Nagrywam… (hotkey ponownie = stop)" "Tink"
+notify "🎙️ Nagrywam z '${MIC#:}'… (hotkey = stop)" "Tink"
 exit 0
