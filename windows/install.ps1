@@ -93,6 +93,11 @@ if ($wantWhisper) {
   if (Test-Path $path) { Ok "Model present: $name" }
   else { Info "Downloading $name (~1.5 GB, one-time)…"; Download "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$name" $path; Ok "Model saved" }
   [Environment]::SetEnvironmentVariable('VOICETYPE_MODEL', $path, 'User')
+
+  # VAD model (~0.9 MB) — skips non-speech so Whisper can't hallucinate phantom phrases on silence.
+  $vad = Join-Path $ModelDir 'ggml-silero-v5.1.2.bin'
+  if (Test-Path $vad) { Ok 'VAD model present' }
+  else { Info 'Downloading VAD model (~0.9 MB, one-time)…'; Download 'https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin' $vad; Ok 'VAD model saved' }
 }
 
 # ── Parakeet backend ──────────────────────────────────────────────────────────

@@ -42,6 +42,7 @@ $Mic       = Get-Env 'VOICETYPE_MIC' ''
 $Prompt    = Get-Env 'VOICETYPE_PROMPT' ''
 $Paste     = Get-Env 'VOICETYPE_PASTE' '1'
 $Model     = Get-Env 'VOICETYPE_MODEL' (Join-Path $env:USERPROFILE '.voicetype\models\ggml-large-v3-turbo.bin')
+$VadModel  = Get-Env 'VOICETYPE_VAD_MODEL' (Join-Path $env:USERPROFILE '.voicetype\models\ggml-silero-v5.1.2.bin')
 $WhisperBin = Get-Env 'VOICETYPE_WHISPER_BIN' 'whisper-cli.exe'
 $ParakeetBin = Get-Env 'VOICETYPE_PARAKEET_BIN' 'parakeet-cli.exe'
 $ParakeetModel = Get-Env 'VOICETYPE_PARAKEET_MODEL' (Join-Path $env:USERPROFILE '.voicetype\models\ggml-parakeet-tdt-0.6b-v3-q8_0.bin')
@@ -76,23 +77,35 @@ function Get-DefaultMic {
     -ArgumentList @('-hide_banner', '-list_devices', 'true', '-f', 'dshow', '-i', 'dummy')
   $out = Get-Content $tmp -ErrorAction SilentlyContinue
   Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+  # Prefer a real input; skip known virtual/loopback devices that are silent without routing.
+  $virt = 'VB-Audio|VB-Cable|CABLE Output|VoiceMeeter|Virtual|Stereo Mix|Miks stereo|What U Hear|Wave Out'
+  $first = $null
   foreach ($line in $out) {
-    if ($line -match '"([^"]+)"\s*\(audio\)') { return $Matches[1] }
+    if ($line -match '"([^"]+)"\s*\(audio\)') {
+      $name = $Matches[1]
+      if ($name -notmatch $virt) { return $name }
+      if (-not $first) { $first = $name }
+    }
   }
   # Fallback for older ffmpeg with section headers.
   $inAudio = $false
   foreach ($line in $out) {
     if ($line -match 'DirectShow audio devices') { $inAudio = $true; continue }
     if ($line -match 'DirectShow video devices') { $inAudio = $false; continue }
-    if ($inAudio -and $line -match '"([^"]+)"') { return $Matches[1] }
+    if ($inAudio -and $line -match '"([^"]+)"') {
+      $name = $Matches[1]
+      if ($name -notmatch $virt) { return $name }
+      if (-not $first) { $first = $name }
+    }
   }
-  return $null
+  return $first   # all virtual? fall back to the first one
 }
 
 # ── Transcription backends -> raw text on stdout ──────────────────────────────
 function Transcribe-Local {
   $of = Join-Path $WorkDir 'out'
   $a = @('-m', $Model, '-f', $Wav, '-l', $Lang, '-nt', '-np', '-otxt', '-of', $of)
+  if ((Test-Path $VadModel) -and (Test-WhisperVad)) { $a += @('--vad', '--vad-model', $VadModel) }
   if ($Prompt) { $a += @('--prompt', $Prompt) }
   & $WhisperBin @a *> $null
   Get-Content "$of.txt" -Raw -Encoding UTF8
@@ -140,6 +153,32 @@ function Transcribe-Elevenlabs {
   ($r | ConvertFrom-Json).text
 }
 
+# Known Whisper hallucinations on silence — whole output == phantom -> treat as no speech.
+function Test-Phantom($t) {
+  $n = ($t -replace '[.!?…]+$', '').Trim().ToLowerInvariant()
+  $ph = @('dziękuję za uwagę', 'dzięki za uwagę', 'dziękuję za oglądanie', 'dzięki za oglądanie',
+          'dziękuję za obejrzenie', 'dziękuję', 'dzięki', 'napisy stworzone przez społeczność amara.org',
+          'zapraszam do subskrypcji', 'do zobaczenia', 'thank you for watching', 'thanks for watching',
+          'thank you', 'you', 'subtitles by the amara.org community')
+  return $ph -contains $n
+}
+
+# Does the installed whisper build understand --vad? (Silero VAD stops silence hallucinations.)
+function Test-WhisperVad {
+  try { return ((& $WhisperBin --help 2>&1 | Out-String) -match '--vad') } catch { return $false }
+}
+
+# Peak level (dB) of a wav via ffmpeg volumedetect; $null if unknown. Invariant parse (PL locale uses comma).
+function Get-PeakDb($wavPath) {
+  try {
+    $vd = & ffmpeg -hide_banner -i $wavPath -af volumedetect -f null - 2>&1 | Out-String
+    if ($vd -match 'max_volume:\s*(-?[0-9.]+) dB') {
+      return [double]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture)
+    }
+  } catch {}
+  return $null
+}
+
 # ── STOP branch: a recording is in progress -> finish + transcribe ────────────
 if (Test-Path $PidFile) {
   $ffPid = 0
@@ -155,6 +194,10 @@ if (Test-Path $PidFile) {
     Remove-Item $Wav -Force -ErrorAction SilentlyContinue
     & ffmpeg -nostdin -hide_banner -loglevel error -f s16le -ar 16000 -ac 1 -i $Pcm -y $Wav *> $null
     if (-not (Test-Path $Wav) -or (Get-Item $Wav).Length -eq 0) { Notify 'No recording'; exit 0 }
+    # Silence guard: a dead/virtual device (or no mic permission) records ~ -91 dB. Without this,
+    # Whisper HALLUCINATES phantom phrases on silence. Threshold -70 dB.
+    $peak = Get-PeakDb $Wav
+    if ($null -ne $peak -and $peak -lt -70) { Notify 'Silence - check your microphone'; exit 0 }
     Notify 'Transcribing...'
 
     switch ($Backend) {
@@ -169,7 +212,9 @@ if (Test-Path $PidFile) {
     if ($null -eq $raw) { exit 1 }
 
     $text = (($raw -replace '\[BLANK_AUDIO\]', '' -replace '\[[^\]]*\]', '') -replace '\s+', ' ').Trim()
-    if (-not $text) { Notify 'Nothing recognized'; exit 0 }
+    # Empty, or the whole output is a known silence-hallucination -> don't paste (VAD usually kills
+    # these; this also covers cloud backends that have no VAD).
+    if (-not $text -or (Test-Phantom $text)) { Notify 'Nothing recognized'; exit 0 }
 
     Set-Clipboard -Value $text
     if ($Paste -eq '1') {
