@@ -29,6 +29,17 @@
 #   VOICETYPE_PROMPT    initial prompt / słownik nazw własnych (local + cloud OpenAI-compatible)
 #   VOICETYPE_PASTE     1 = auto-wklej (Cmd+V), 0 = zostaw tylko w schowku (domyślnie 1)
 #   VOICETYPE_DIR       katalog roboczy (domyślnie /tmp/voice-type)
+#   VOICETYPE_FORMAT    preset formatowania LLM po transkrypcji (np. 'email'); można też podać
+#                       jako argument CLI: --format <nazwa>. Puste (domyślnie) = brak formatowania,
+#                       zero zmiany zachowania i zero dodatkowego opóźnienia/kosztu.
+#
+# format (opcjonalne post-processing przez LLM zgodny z OpenAI /chat/completions):
+#   VOICETYPE_FORMAT_URL    endpoint (domyślnie Groq; ustaw na lokalny serwer np. Ollama/LM Studio)
+#   VOICETYPE_FORMAT_MODEL  model (domyślnie szybki Groq Llama)
+#   VOICETYPE_FORMAT_KEY    klucz; fallback VOICETYPE_CLOUD_KEY, potem GROQ_API_KEY, potem OPENAI_API_KEY
+#                           (puste -> brak nagłówka Authorization, dla lokalnych serwerów bez klucza)
+#   VOICETYPE_PROMPTS_DIR   katalog presetów (domyślnie ~/.voicetype/prompts); preset = plik <nazwa>.txt,
+#                           cała treść pliku to system-prompt wysyłany do LLM
 #
 # local:       VOICETYPE_MODEL            ścieżka do modelu ggml (domyślnie large-v3-turbo)
 # parakeet:    VOICETYPE_PARAKEET_MODEL   repo HF (domyślnie mlx-community/parakeet-tdt-0.6b-v3)
@@ -73,6 +84,11 @@ PARAKEET_MODEL="${VOICETYPE_PARAKEET_MODEL:-mlx-community/parakeet-tdt-0.6b-v3}"
 # cloud / openai-compatible (Groq, OpenAI, …)
 CLOUD_URL="${VOICETYPE_CLOUD_URL:-https://api.groq.com/openai/v1/audio/transcriptions}"
 CLOUD_MODEL="${VOICETYPE_CLOUD_MODEL:-whisper-large-v3-turbo}"
+# format LLM (OpenAI-compatible chat/completions) — niezależny od backendu transkrypcji
+FORMAT="${VOICETYPE_FORMAT:-}"
+FORMAT_URL="${VOICETYPE_FORMAT_URL:-https://api.groq.com/openai/v1/chat/completions}"
+FORMAT_MODEL="${VOICETYPE_FORMAT_MODEL:-llama-3.3-70b-versatile}"
+PROMPTS_DIR="${VOICETYPE_PROMPTS_DIR:-$HOME/.voicetype/prompts}"
 # deepgram
 DEEPGRAM_MODEL="${VOICETYPE_DEEPGRAM_MODEL:-nova-3}"
 # elevenlabs
@@ -249,7 +265,41 @@ transcribe_elevenlabs() {
     || { notify "ElevenLabs: błąd sieci/API ❌"; return 1; }
 }
 
+# Formatowanie tekstu przez LLM zgodny z OpenAI /chat/completions (Groq, OpenAI, lokalny Ollama/LM Studio…).
+# $1 = surowy tekst, $2 = nazwa presetu (plik $PROMPTS_DIR/$2.txt = system-prompt).
+# stdout = sformatowany tekst. Zwraca: 0 = sukces, 1 = błąd przejściowy (caller ma fallback na surowy
+# tekst), 2 = nieznany preset (błąd configu, caller ma przerwać zamiast wklejać cokolwiek).
+format_llm() {
+  local text="$1" preset="$2" prompt_file key sys_prompt body args resp out
+  prompt_file="$PROMPTS_DIR/$preset.txt"
+  if [ ! -f "$prompt_file" ]; then
+    notify "❌ nieznany format: $preset"
+    return 2
+  fi
+  need_jq || return 1
+  key="${VOICETYPE_FORMAT_KEY:-${VOICETYPE_CLOUD_KEY:-${GROQ_API_KEY:-${OPENAI_API_KEY:-}}}}"
+  sys_prompt=$(cat "$prompt_file")
+  body=$(jq -n --arg model "$FORMAT_MODEL" --arg sys "$sys_prompt" --arg user "$text" \
+    '{model: $model, messages: [{role: "system", content: $sys}, {role: "user", content: $user}], temperature: 0.2}')
+  args=(-fsS --max-time 15 "$FORMAT_URL" -H "Content-Type: application/json" -d "$body")
+  [ -n "$key" ] && args+=(-H "Authorization: Bearer $key")
+  resp=$(curl "${args[@]}" 2>/dev/null) || return 1
+  out=$(printf '%s' "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+  [ -n "$out" ] || return 1
+  # Zdejmij ewentualny markdown code-fence, gdyby model mimo instrukcji w prompcie go dodał.
+  out=$(printf '%s' "$out" | sed -e '1{/^```/d;}' -e '${/^```$/d;}')
+  printf '%s' "$out"
+}
+
 main() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --format) FORMAT="$2"; shift 2 ;;
+      --format=*) FORMAT="${1#*=}"; shift ;;
+      *) shift ;;
+    esac
+  done
+
   # ── Gałąź STOP: trwa nagrywanie -> zakończ i transkrybuj ──────────────────────
   if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
     PID=$(cat "$PIDFILE")
@@ -288,6 +338,18 @@ main() {
     # także dla backendów chmurowych bez VAD) -> nie wklejaj.
     if [ -z "$TEXT" ] || is_phantom "$TEXT"; then notify "Nic nie rozpoznano 🤷"; exit 0; fi
 
+    STOP_FORMAT=$(cat "$WORKDIR/format" 2>/dev/null || true)
+    if [ -n "$STOP_FORMAT" ]; then
+      FORMATTED=$(format_llm "$TEXT" "$STOP_FORMAT"); rc=$?
+      if [ $rc -eq 0 ]; then
+        TEXT="$FORMATTED"
+      elif [ $rc -eq 2 ]; then
+        exit 0   # nieznany preset — format_llm już zanotyfikował błąd, nic nie wklejaj
+      else
+        notify "⚠️ formatowanie nieudane — wklejono surowy tekst"
+      fi
+    fi
+
     printf '%s' "$TEXT" | pbcopy
     if [ "$PASTE" = "1" ]; then
       osascript -e 'tell application "System Events" to keystroke "v" using command down' >/dev/null 2>&1 || true
@@ -305,6 +367,7 @@ main() {
     if [ -n "$DEV_NAME" ]; then MIC=":$DEV_NAME"; fi
   fi
   printf '%s' "${MIC#:}" > "$WORKDIR/mic"   # zapamiętaj urządzenie dla gałęzi STOP
+  printf '%s' "$FORMAT" > "$WORKDIR/format"   # zapamiętaj wybrany preset dla gałęzi STOP
   rm -f "$WAV" "$OUT.txt" "$PIDFILE"
   nohup ffmpeg -nostdin -hide_banner -loglevel error \
     -f avfoundation -i "$MIC" -ar 16000 -ac 1 -y "$WAV" >/dev/null 2>&1 &

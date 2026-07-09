@@ -13,9 +13,11 @@ jobs:
       - name: ShellCheck scripts
         run: shellcheck install.sh engine/voice-type.sh
       - name: ShellCheck the test scripts themselves
-        run: shellcheck engine/voice-type.test.sh
+        run: shellcheck engine/voice-type.test.sh engine/voice-type-format.test.sh
       - name: Unit tests (resolve_auto_mic)
         run: bash engine/voice-type.test.sh
+      - name: Unit tests (format_llm)
+        run: bash engine/voice-type-format.test.sh
 
   powershell:
     runs-on: ubuntu-latest
