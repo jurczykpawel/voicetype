@@ -2,7 +2,7 @@
 # Testy jednostkowe dla resolve_auto_mic()/is_avoided()/filter_avoided() —
 # źródłuje silnik (dzięki run-guard nie odpala prawdziwego nagrywania) i
 # podstawia fake'i pod default_input_name/list_avfoundation_devices.
-# shellcheck disable=SC2329,SC2034  # fakes/globals used indirectly by sourced resolve_auto_mic()
+# shellcheck disable=SC2329,SC2034,SC2317  # fakes/globals used indirectly by sourced resolve_auto_mic()
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
 
