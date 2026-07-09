@@ -158,6 +158,16 @@ DEFAULT_BACKEND="$CHOICE"; [ "$CHOICE" = "all" ] && DEFAULT_BACKEND="whisper"
 } > "$CONFIG"
 ok "Engine installed to $ENGINE (CLI: voicetype, default backend: $DEFAULT_BACKEND)"
 
+# ── Formatting preset (email) — seed once, never overwrite a user's edited copy ──
+PROMPTS_DIR="$HOME/.voicetype/prompts"
+if [ -f "$PROMPTS_DIR/email.txt" ]; then
+  ok "Preset email.txt present"
+else
+  mkdir -p "$PROMPTS_DIR"
+  fetch "prompts/email.txt" "$PROMPTS_DIR/email.txt"
+  ok "Preset email.txt saved (try: voicetype --format email)"
+fi
+
 # ── Keyboard Maestro macro ─────────────────────────────────────────────────────
 if [ "${VOICETYPE_NO_KM:-0}" != "1" ] && [ -d "/Applications/Keyboard Maestro.app" ]; then
   TMP_KM="$(mktemp -t voicetype).kmmacros"

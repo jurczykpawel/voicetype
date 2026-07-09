@@ -113,7 +113,10 @@ Set env vars in the Keyboard Maestro action, your shell, or Raycast preferences:
 | `VOICETYPE_BACKEND` | `local` | `local` \| `parakeet` \| `cloud` \| `deepgram` \| `elevenlabs` |
 | `VOICETYPE_LANG` | `pl` | language code (`auto` = autodetect) |
 | `VOICETYPE_MIC` | `:default` | avfoundation device. `:default` follows the macOS system default input, skipping silent virtual devices (Krisp/Teams/BlackHole/Loopback/RØDE Connect). Force one with an index `:1` or name `:MacBook Pro Microphone` (list: `ffmpeg -f avfoundation -list_devices true -i ""`) |
+| `VOICETYPE_MIC_PRIORITY` | — | personal: `;`-separated substrings, checked in priority order before the system default. First currently-connected match wins |
+| `VOICETYPE_MIC_AVOID` | — | personal: `;`-separated substrings for devices used only as a last resort (e.g. a Bluetooth headset) |
 | `VOICETYPE_PROMPT` | — | initial prompt / custom vocabulary (proper nouns, terms) |
+| `VOICETYPE_FORMAT` | — | formatting preset to run the transcript through after transcription (e.g. `email`); same as passing `--format <name>` on the CLI |
 | `VOICETYPE_PASTE` | `1` | `0` = clipboard only, no auto-paste |
 | `VOICETYPE_MODEL` | `~/.local/share/whisper-cpp/ggml-large-v3-turbo.bin` | local: path to any ggml model |
 | `VOICETYPE_VAD_MODEL` | `~/.local/share/whisper-cpp/ggml-silero-v5.1.2.bin` | local: Silero VAD model (auto-downloaded, ~0.9 MB) — skips non-speech so Whisper can't hallucinate phantom phrases on silence |
@@ -125,6 +128,34 @@ Set env vars in the Keyboard Maestro action, your shell, or Raycast preferences:
 | `VOICETYPE_DEEPGRAM_MODEL` | `nova-3` | deepgram: model |
 | `VOICETYPE_ELEVENLABS_KEY` | — | elevenlabs: API key (falls back to `ELEVENLABS_API_KEY`) |
 | `VOICETYPE_ELEVENLABS_MODEL` | `scribe_v1` | elevenlabs: model |
+| `VOICETYPE_FORMAT_URL` | Groq chat/completions URL | format: any OpenAI-compatible `/chat/completions` endpoint — cloud (Groq, OpenAI) or local (Ollama, LM Studio) |
+| `VOICETYPE_FORMAT_MODEL` | fast Groq Llama model | format: model name |
+| `VOICETYPE_FORMAT_KEY` | — | format: API key (falls back to `VOICETYPE_CLOUD_KEY`, then `GROQ_API_KEY`, then `OPENAI_API_KEY`). Leave empty for keyless local servers |
+| `VOICETYPE_PROMPTS_DIR` | `~/.voicetype/prompts` | format: directory of preset files (see below) |
+
+## Formatting presets
+
+Dictate free-form and get it auto-formatted before pasting — e.g. turn rambling speech into a
+ready-to-send email. Opt-in, zero cost/latency when unused:
+
+```bash
+voicetype --format email
+```
+
+A preset is a plain text file, `~/.voicetype/prompts/<name>.txt`, whose entire content is the
+system prompt sent to the LLM along with your transcript. The installer seeds a default
+`email.txt` (never overwriting an existing, possibly edited, copy). Add your own — `slack.txt`,
+`notatka.txt`, whatever — no code changes needed.
+
+The formatting call goes to any OpenAI-compatible `/chat/completions` endpoint — cloud (Groq by
+default, or OpenAI) or local (Ollama, LM Studio: just point `VOICETYPE_FORMAT_URL` at your local
+server and leave the key empty). If the call fails for any reason, the raw transcript is pasted
+instead (with a warning) — you never lose what you said. An unknown preset name aborts instead,
+since that's a config mistake rather than a transient failure.
+
+**Binding it to its own hotkey:** in Raycast, use the separate **"Toggle Dictation — Email"**
+command (its own slot in Raycast Settings → Hotkey). In Keyboard Maestro, duplicate your existing
+dictation macro, give it a new trigger, and change its shell command to pass `--format email`.
 
 ## Windows (beta)
 
