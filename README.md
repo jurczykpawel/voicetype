@@ -155,13 +155,17 @@ since that's a config mistake rather than a transient failure.
 
 **Binding it to its own hotkey:** in Raycast, use the separate **"Toggle Dictation — Email"**
 command (its own slot in Raycast Settings → Hotkey). In Keyboard Maestro, duplicate your existing
-dictation macro, give it a new trigger, and change its shell command to pass `--format email`.
+dictation macro, give it a new trigger, and change its shell command to pass `--format email`. On
+Windows, `voicetype.ahk` already ships a second hotkey, **Win+Shift+E**, for exactly this.
 
 ## Windows (beta)
 
 A PowerShell port lives in [`windows/`](windows/) — local **Parakeet** (recommended, fast) and
 Whisper, plus cloud (Groq/OpenAI/Deepgram/ElevenLabs), driven by an AutoHotkey hotkey
-(Win+Shift+Space). Validated end-to-end on Windows 11. Parakeet uses whisper.cpp's
+(Win+Shift+Space, or Win+Shift+E to dictate straight into an `--format email`). Also supports the
+same `VOICETYPE_FORMAT`/`VOICETYPE_FORMAT_URL`/`VOICETYPE_FORMAT_MODEL`/`VOICETYPE_FORMAT_KEY`/
+`VOICETYPE_PROMPTS_DIR` env vars as macOS — see [Formatting presets](#formatting-presets) above.
+Validated end-to-end on Windows 11. Parakeet uses whisper.cpp's
 `parakeet-cli.exe` (CPU) — much faster than Whisper there. Local transcription is CPU-only on
 Windows, so not as snappy as on Apple Silicon. See [`windows/README.md`](windows/README.md).
 
