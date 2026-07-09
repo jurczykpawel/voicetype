@@ -113,6 +113,13 @@ if ($wantParakeet) {
   [Environment]::SetEnvironmentVariable('VOICETYPE_PARAKEET_MODEL', $path, 'User')
 }
 
+# ── Formatting preset (email) ─────────────────────────────────────────────────
+$promptsDir = Join-Path $env:USERPROFILE '.voicetype\prompts'
+New-Item -ItemType Directory -Force -Path $promptsDir | Out-Null
+$emailPrompt = Join-Path $promptsDir 'email.txt'
+if (Test-Path $emailPrompt) { Ok 'Preset email.txt present' }
+else { Download "$Raw/prompts/email.txt" $emailPrompt; Ok 'Preset email.txt saved' }
+
 # ── Engine + AHK ──────────────────────────────────────────────────────────────
 Download "$Raw/windows/voice-type.ps1" $Engine
 Download "$Raw/windows/voicetype.ahk"  $Ahk

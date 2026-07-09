@@ -14,11 +14,17 @@
     VOICETYPE_PROMPT    initial prompt / vocabulary (local + cloud OpenAI-compatible)
     VOICETYPE_PASTE     1 = auto-paste Ctrl+V (default), 0 = clipboard only
     VOICETYPE_DIR       work dir (default %TEMP%\voice-type)
+    VOICETYPE_FORMAT    formatting preset to run the transcript through after transcription (e.g.
+                        'email'); same as passing --format <name> on the CLI. Empty (default) = off.
     local:      VOICETYPE_MODEL        path to ggml model (default %USERPROFILE%\.voicetype\models\ggml-large-v3-turbo.bin)
                 VOICETYPE_WHISPER_BIN  whisper-cli executable (default whisper-cli.exe)
     cloud:      VOICETYPE_CLOUD_URL/MODEL/KEY  (key falls back to $env:GROQ_API_KEY then $env:OPENAI_API_KEY)
     deepgram:   VOICETYPE_DEEPGRAM_KEY/MODEL   (key falls back to $env:DEEPGRAM_API_KEY)
     elevenlabs: VOICETYPE_ELEVENLABS_KEY/MODEL (key falls back to $env:ELEVENLABS_API_KEY)
+    format:     VOICETYPE_FORMAT_URL/MODEL/KEY (key falls back to VOICETYPE_CLOUD_KEY, then
+                GROQ_API_KEY, then OPENAI_API_KEY; empty = no Authorization header, for keyless
+                local servers), VOICETYPE_PROMPTS_DIR (default %USERPROFILE%\.voicetype\prompts) —
+                a preset is a plain text file <name>.txt whose whole content is the system prompt.
 
   Requires: ffmpeg + curl.exe (built into Windows 10/11). Local backend also needs whisper-cli.exe.
 #>
@@ -50,6 +56,16 @@ $CloudUrl  = Get-Env 'VOICETYPE_CLOUD_URL' 'https://api.groq.com/openai/v1/audio
 $CloudModel = Get-Env 'VOICETYPE_CLOUD_MODEL' 'whisper-large-v3-turbo'
 $DeepgramModel = Get-Env 'VOICETYPE_DEEPGRAM_MODEL' 'nova-3'
 $ElevenModel   = Get-Env 'VOICETYPE_ELEVENLABS_MODEL' 'scribe_v1'
+$Format      = Get-Env 'VOICETYPE_FORMAT' ''
+$FormatUrl   = Get-Env 'VOICETYPE_FORMAT_URL' 'https://api.groq.com/openai/v1/chat/completions'
+$FormatModel = Get-Env 'VOICETYPE_FORMAT_MODEL' 'llama-3.3-70b-versatile'
+$PromptsDir  = Get-Env 'VOICETYPE_PROMPTS_DIR' (Join-Path $env:USERPROFILE '.voicetype\prompts')
+
+# --format <name> / --format=<name> on the CLI overrides VOICETYPE_FORMAT.
+for ($i = 0; $i -lt $args.Count; $i++) {
+  if ($args[$i] -eq '--format' -and ($i + 1) -lt $args.Count) { $Format = $args[$i + 1] }
+  elseif ($args[$i] -like '--format=*') { $Format = $args[$i].Substring(9) }
+}
 
 function Notify($text) {
   try {
@@ -185,6 +201,37 @@ function Get-PeakDb($wavPath) {
   return $null
 }
 
+# Formats text through any OpenAI-compatible /chat/completions endpoint (Groq, OpenAI, local
+# Ollama/LM Studio…). Preset = plain text file $PromptsDir\<preset>.txt (whole content = system
+# prompt). Returns @{ Ok = $true; Text = ... } on success, @{ Ok = $false; Unknown = $true } for an
+# unknown preset (caller should abort), or @{ Ok = $false; Unknown = $false } for a transient
+# failure (caller should fall back to the raw transcript).
+function Format-Llm($text, $preset) {
+  $promptFile = Join-Path $PromptsDir "$preset.txt"
+  if (-not (Test-Path $promptFile)) { return @{ Ok = $false; Unknown = $true } }
+  $sysPrompt = Get-Content $promptFile -Raw -Encoding UTF8
+  $key = Get-Env 'VOICETYPE_FORMAT_KEY' (Get-Env 'VOICETYPE_CLOUD_KEY' (Get-Env 'GROQ_API_KEY' (Get-Env 'OPENAI_API_KEY' '')))
+  $body = @{
+    model = $FormatModel
+    messages = @(
+      @{ role = 'system'; content = $sysPrompt }
+      @{ role = 'user'; content = $text }
+    )
+    temperature = 0.2
+  } | ConvertTo-Json -Depth 5
+  $headers = @{ 'Content-Type' = 'application/json' }
+  if ($key) { $headers['Authorization'] = "Bearer $key" }
+  try {
+    $resp = Invoke-RestMethod -Uri $FormatUrl -Method Post -Headers $headers -Body $body -TimeoutSec 15
+    $out = $resp.choices[0].message.content
+    if (-not $out) { return @{ Ok = $false; Unknown = $false } }
+    $out = $out -replace '^```[a-zA-Z]*\r?\n', '' -replace '\r?\n```$', ''
+    return @{ Ok = $true; Text = $out.Trim() }
+  } catch {
+    return @{ Ok = $false; Unknown = $false }
+  }
+}
+
 # ── STOP branch: a recording is in progress -> finish + transcribe ────────────
 if (Test-Path $PidFile) {
   $ffPid = 0
@@ -222,6 +269,21 @@ if (Test-Path $PidFile) {
     # these; this also covers cloud backends that have no VAD).
     if (-not $text -or (Test-Phantom $text)) { Notify 'Nothing recognized'; exit 0 }
 
+    $stopFormat = ''
+    $formatFile = Join-Path $WorkDir 'format'
+    if (Test-Path $formatFile) { $stopFormat = (Get-Content $formatFile -Raw -Encoding UTF8).Trim() }
+    if ($stopFormat) {
+      $result = Format-Llm $text $stopFormat
+      if ($result.Ok) {
+        $text = $result.Text
+      } elseif ($result.Unknown) {
+        Notify "Unknown format: $stopFormat"
+        exit 0
+      } else {
+        Notify 'Formatting failed - pasted raw transcript'
+      }
+    }
+
     Set-Clipboard -Value $text
     if ($Paste -eq '1') {
       Add-Type -AssemblyName System.Windows.Forms
@@ -239,6 +301,7 @@ if (Test-Path $PidFile) {
 Remove-Item $Wav, $Pcm -Force -ErrorAction SilentlyContinue
 if (-not $Mic) { $Mic = Get-DefaultMic }
 if (-not $Mic) { Notify 'No microphone found (set VOICETYPE_MIC)'; exit 1 }
+Set-Content -Path (Join-Path $WorkDir 'format') -Value $Format -Encoding UTF8 -NoNewline
 
 # Record to raw PCM (s16le). The dshow device name has spaces, so it must stay quoted
 # as one argument; and raw PCM needs no finalization, so stop = a safe hard kill.
