@@ -12,6 +12,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: ShellCheck scripts
         run: shellcheck install.sh engine/voice-type.sh
+      - name: ShellCheck the test scripts themselves
+        run: shellcheck engine/voice-type.test.sh
+      - name: Unit tests (resolve_auto_mic)
+        run: bash engine/voice-type.test.sh
 
   powershell:
     runs-on: ubuntu-latest

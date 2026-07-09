@@ -20,6 +20,12 @@
 #                       Wymuszenie konkretnego: indeks ':1' albo nazwa ':MacBook Pro Microphone'.
 #                       (UWAGA: własne ':default' avfoundation to indeks [0] — często wirtualny,
 #                       niemy kanał → cisza → Whisper HALUCYNUJE. Dlatego wybieramy mic sami.)
+#   VOICETYPE_MIC_PRIORITY  (personal) ';'-separated substrings, w kolejności priorytetu. Gdy
+#                       MIC=':default' i aktualnie podłączone urządzenie pasuje do wpisu, wygrywa —
+#                       nawet nad systemowym defaultem macOS. Puste (domyślnie) = brak override'u.
+#   VOICETYPE_MIC_AVOID     (personal) ';'-separated substrings urządzeń używanych TYLKO w ostatniej
+#                       kolejności (np. słuchawki BT, przez które nie chcesz dyktować przez pomyłkę).
+#                       Puste (domyślnie) = żadne urządzenie nie jest unikane.
 #   VOICETYPE_PROMPT    initial prompt / słownik nazw własnych (local + cloud OpenAI-compatible)
 #   VOICETYPE_PASTE     1 = auto-wklej (Cmd+V), 0 = zostaw tylko w schowku (domyślnie 1)
 #   VOICETYPE_DIR       katalog roboczy (domyślnie /tmp/voice-type)
@@ -52,6 +58,8 @@ WORKDIR="${VOICETYPE_DIR:-/tmp/voice-type}"
 BACKEND="${VOICETYPE_BACKEND:-local}"
 LANG_CODE="${VOICETYPE_LANG:-pl}"
 MIC="${VOICETYPE_MIC:-:default}"
+MIC_PRIORITY="${VOICETYPE_MIC_PRIORITY:-}"   # personal: ordered ';'-separated substrings, checked before system default
+MIC_AVOID="${VOICETYPE_MIC_AVOID:-}"         # personal: ';'-separated substrings, used only as a last resort
 PROMPT="${VOICETYPE_PROMPT:-}"
 PASTE="${VOICETYPE_PASTE:-1}"
 # local (whisper.cpp)
@@ -100,22 +108,59 @@ default_input_name() {
   '
 }
 
+# Lista wejść audio avfoundation, jedno urządzenie na linię (bez indeksów).
+list_avfoundation_devices() {
+  ffmpeg -f avfoundation -list_devices true -i "" 2>&1 \
+    | sed -n '/audio devices/,$p' | sed -E 's/^.*\] \[[0-9]+\] //'
+}
+
+# Czy $1 pasuje do któregoś z ';'-rozdzielonych wpisów VOICETYPE_MIC_AVOID?
+is_avoided() {
+  [ -n "$MIC_AVOID" ] || return 1
+  printf '%s' "$1" | grep -qiF -f <(printf '%s\n' "${MIC_AVOID//;/$'\n'}")
+}
+
+# Usuwa ze stdin linie pasujące do VOICETYPE_MIC_AVOID (no-op gdy pusty).
+filter_avoided() {
+  if [ -n "$MIC_AVOID" ]; then
+    grep -viF -f <(printf '%s\n' "${MIC_AVOID//;/$'\n'}")
+  else
+    cat
+  fi
+}
+
 # Auto-wybór REALNEGO mikrofonu dla MIC=':default' (uniwersalnie, nie pod jeden sprzęt):
-#   1) systemowy domyślny input — o ile to NIE martwe urządzenie wirtualne (macOS sam przełącza
-#      default na wpięty mic USB, więc zwykle wystarcza ten krok — "wpięty USB → USB");
+#   0) VOICETYPE_MIC_PRIORITY (personal, opcjonalny) — pierwsze aktualnie podłączone urządzenie
+#      z tej listy wygrywa, z pominięciem reszty logiki poniżej;
+#   1) systemowy domyślny input — o ile to NIE martwe urządzenie wirtualne ani VOICETYPE_MIC_AVOID
+#      (macOS sam przełącza default na wpięty mic USB, więc zwykle wystarcza ten krok);
 #   2) inaczej wbudowany mikrofon (zawsze ma sygnał; "odłączony → wbudowany");
-#   3) inaczej pierwszy nie-wirtualny input z listy. Pusto → wołający zostaje przy ':default'.
+#   3) inaczej pierwszy nie-wirtualny, nie-unikany input z listy;
+#   4) inaczej (wszystko unikane) pierwszy nie-wirtualny input mimo wszystko — lepiej to niż cisza.
+#   Pusto → wołający zostaje przy ':default'.
 resolve_auto_mic() {
-  local def list mbp real
+  local def list mbp real parts entry match
+  if [ -n "$MIC_PRIORITY" ]; then
+    list=$(list_avfoundation_devices)
+    IFS=';' read -ra parts <<< "$MIC_PRIORITY"
+    for entry in "${parts[@]}"; do
+      [ -n "$entry" ] || continue
+      match=$(printf '%s\n' "$list" | grep -iF "$entry" | head -1)
+      if [ -n "$match" ]; then printf '%s' "$match"; return; fi
+    done
+  fi
   def=$(default_input_name)
-  if [ -n "$def" ] && ! printf '%s' "$def" | grep -qiE "$VIRT_RE"; then
+  if [ -n "$def" ] && ! printf '%s' "$def" | grep -qiE "$VIRT_RE" && ! is_avoided "$def"; then
     printf '%s' "$def"; return
   fi
-  list=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 \
-         | sed -n '/audio devices/,$p' | sed -E 's/^.*\] \[[0-9]+\] //')
+  list=$(list_avfoundation_devices)
   mbp=$(printf '%s\n' "$list" | grep -iE 'MacBook.*Microphone|Built-in.*Micro' | head -1)
-  if [ -n "$mbp" ]; then printf '%s' "$mbp"; return; fi
-  real=$(printf '%s\n' "$list" | grep -viE "$VIRT_RE" | grep -iE 'micro|mic|input|usb' | head -1)
+  if [ -n "$mbp" ] && ! is_avoided "$mbp"; then printf '%s' "$mbp"; return; fi
+  real=$(printf '%s\n' "$list" | grep -viE "$VIRT_RE" | filter_avoided | grep -iE 'micro|mic|input|usb' | head -1)
+  if [ -n "$real" ]; then printf '%s' "$real"; return; fi
+  # Ostatnia deska ratunku: wszystko nie-wirtualne wykluczone/unikane — bierz cokolwiek zostało
+  # (avfoundation i tak listuje same wejścia audio, filtr nazw tu tylko by szkodził, np. "WH-1000XM4").
+  real=$(printf '%s\n' "$list" | grep -viE "$VIRT_RE" | head -1)
   if [ -n "$real" ]; then printf '%s' "$real"; return; fi
   printf '%s' "$def"
 }
@@ -204,64 +249,70 @@ transcribe_elevenlabs() {
     || { notify "ElevenLabs: błąd sieci/API ❌"; return 1; }
 }
 
-# ── Gałąź STOP: trwa nagrywanie -> zakończ i transkrybuj ──────────────────────
-if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
-  PID=$(cat "$PIDFILE")
-  kill -INT "$PID" 2>/dev/null || true        # SIGINT -> ffmpeg finalizuje WAV
-  for _ in $(seq 1 50); do kill -0 "$PID" 2>/dev/null || break; sleep 0.1; done
-  kill -KILL "$PID" 2>/dev/null || true
-  rm -f "$PIDFILE"
+main() {
+  # ── Gałąź STOP: trwa nagrywanie -> zakończ i transkrybuj ──────────────────────
+  if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+    PID=$(cat "$PIDFILE")
+    kill -INT "$PID" 2>/dev/null || true        # SIGINT -> ffmpeg finalizuje WAV
+    for _ in $(seq 1 50); do kill -0 "$PID" 2>/dev/null || break; sleep 0.1; done
+    kill -KILL "$PID" 2>/dev/null || true
+    rm -f "$PIDFILE"
 
-  if [ ! -s "$WAV" ]; then notify "Brak nagrania 🤷"; exit 0; fi
+    if [ ! -s "$WAV" ]; then notify "Brak nagrania 🤷"; exit 0; fi
 
-  # Straż ciszy: martwe/wirtualne urządzenie (albo brak zgody na mikrofon) daje ~ -91 dB.
-  # Bez tego Whisper na ciszy HALUCYNUJE (klasyczne "Dziękuję za uwagę."). Próg -70 dB.
-  DEV_USED=$(cat "$WORKDIR/mic" 2>/dev/null || echo "${MIC#:}")
-  MAXVOL=$(ffmpeg -hide_banner -i "$WAV" -af volumedetect -f null - 2>&1 \
-           | sed -n 's/.*max_volume: \(-*[0-9.]*\) dB/\1/p')
-  if [ -n "$MAXVOL" ] && awk "BEGIN{exit !($MAXVOL < -70)}"; then
-    notify "🔇 Cisza z '$DEV_USED' (${MAXVOL} dB) — sprawdź mikrofon / zgodę na Mikrofon"
+    # Straż ciszy: martwe/wirtualne urządzenie (albo brak zgody na mikrofon) daje ~ -91 dB.
+    # Bez tego Whisper na ciszy HALUCYNUJE (klasyczne "Dziękuję za uwagę."). Próg -70 dB.
+    DEV_USED=$(cat "$WORKDIR/mic" 2>/dev/null || echo "${MIC#:}")
+    MAXVOL=$(ffmpeg -hide_banner -i "$WAV" -af volumedetect -f null - 2>&1 \
+             | sed -n 's/.*max_volume: \(-*[0-9.]*\) dB/\1/p')
+    if [ -n "$MAXVOL" ] && awk "BEGIN{exit !($MAXVOL < -70)}"; then
+      notify "🔇 Cisza z '$DEV_USED' (${MAXVOL} dB) — sprawdź mikrofon / zgodę na Mikrofon"
+      exit 0
+    fi
+    notify "⏳ Transkrybuję… (${DEV_USED})"
+
+    case "$BACKEND" in
+      parakeet)          RAW=$(transcribe_parakeet)   || exit 1 ;;
+      cloud|openai|groq) RAW=$(transcribe_cloud)      || exit 1 ;;
+      deepgram)          RAW=$(transcribe_deepgram)   || exit 1 ;;
+      elevenlabs)        RAW=$(transcribe_elevenlabs) || exit 1 ;;
+      *)                 RAW=$(transcribe_local) ;;   # whisper / local (domyślnie)
+    esac
+
+    TEXT=$(printf '%s' "$RAW" \
+           | sed -e 's/\[BLANK_AUDIO\]//g' -e 's/\[.*\]//g' \
+           | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+           | sed '/^$/d' | paste -sd ' ' - | tr -s ' ')
+
+    # Całe wyjście to fantom Whispera z ciszy (VAD go zwykle ubija, to siatka bezpieczeństwa
+    # także dla backendów chmurowych bez VAD) -> nie wklejaj.
+    if [ -z "$TEXT" ] || is_phantom "$TEXT"; then notify "Nic nie rozpoznano 🤷"; exit 0; fi
+
+    printf '%s' "$TEXT" | pbcopy
+    if [ "$PASTE" = "1" ]; then
+      osascript -e 'tell application "System Events" to keystroke "v" using command down' >/dev/null 2>&1 || true
+    fi
+    notify "✅ ${TEXT:0:90}"
+    printf '%s' "$TEXT"   # czysty transkrypt na stdout (dla Raycasta / pipe'ów)
     exit 0
   fi
-  notify "⏳ Transkrybuję… (${DEV_USED})"
 
-  case "$BACKEND" in
-    parakeet)          RAW=$(transcribe_parakeet)   || exit 1 ;;
-    cloud|openai|groq) RAW=$(transcribe_cloud)      || exit 1 ;;
-    deepgram)          RAW=$(transcribe_deepgram)   || exit 1 ;;
-    elevenlabs)        RAW=$(transcribe_elevenlabs) || exit 1 ;;
-    *)                 RAW=$(transcribe_local) ;;   # whisper / local (domyślnie)
-  esac
-
-  TEXT=$(printf '%s' "$RAW" \
-         | sed -e 's/\[BLANK_AUDIO\]//g' -e 's/\[.*\]//g' \
-         | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-         | sed '/^$/d' | paste -sd ' ' - | tr -s ' ')
-
-  # Całe wyjście to fantom Whispera z ciszy (VAD go zwykle ubija, to siatka bezpieczeństwa
-  # także dla backendów chmurowych bez VAD) -> nie wklejaj.
-  if [ -z "$TEXT" ] || is_phantom "$TEXT"; then notify "Nic nie rozpoznano 🤷"; exit 0; fi
-
-  printf '%s' "$TEXT" | pbcopy
-  if [ "$PASTE" = "1" ]; then
-    osascript -e 'tell application "System Events" to keystroke "v" using command down' >/dev/null 2>&1 || true
+  # ── Gałąź START: rozpocznij nagrywanie ───────────────────────────────────────
+  # ':default' avfoundation = indeks [0] (często wirtualny, niemy), NIE systemowy default.
+  # Auto-wybieramy realny mikrofon (wpięty USB → USB; odłączony → wbudowany) i podajemy po nazwie.
+  if [ "$MIC" = ":default" ]; then
+    DEV_NAME=$(resolve_auto_mic)
+    if [ -n "$DEV_NAME" ]; then MIC=":$DEV_NAME"; fi
   fi
-  notify "✅ ${TEXT:0:90}"
-  printf '%s' "$TEXT"   # czysty transkrypt na stdout (dla Raycasta / pipe'ów)
+  printf '%s' "${MIC#:}" > "$WORKDIR/mic"   # zapamiętaj urządzenie dla gałęzi STOP
+  rm -f "$WAV" "$OUT.txt" "$PIDFILE"
+  nohup ffmpeg -nostdin -hide_banner -loglevel error \
+    -f avfoundation -i "$MIC" -ar 16000 -ac 1 -y "$WAV" >/dev/null 2>&1 &
+  echo $! > "$PIDFILE"
+  notify "🎙️ Nagrywam z '${MIC#:}'… (hotkey = stop)" "Tink"
   exit 0
-fi
+}
 
-# ── Gałąź START: rozpocznij nagrywanie ───────────────────────────────────────
-# ':default' avfoundation = indeks [0] (często wirtualny, niemy), NIE systemowy default.
-# Auto-wybieramy realny mikrofon (wpięty USB → USB; odłączony → wbudowany) i podajemy po nazwie.
-if [ "$MIC" = ":default" ]; then
-  DEV_NAME=$(resolve_auto_mic)
-  if [ -n "$DEV_NAME" ]; then MIC=":$DEV_NAME"; fi
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
 fi
-printf '%s' "${MIC#:}" > "$WORKDIR/mic"   # zapamiętaj urządzenie dla gałęzi STOP
-rm -f "$WAV" "$OUT.txt" "$PIDFILE"
-nohup ffmpeg -nostdin -hide_banner -loglevel error \
-  -f avfoundation -i "$MIC" -ar 16000 -ac 1 -y "$WAV" >/dev/null 2>&1 &
-echo $! > "$PIDFILE"
-notify "🎙️ Nagrywam z '${MIC#:}'… (hotkey = stop)" "Tink"
-exit 0
