@@ -16,6 +16,13 @@
       "mode": "no-view"
     },
     {
+      "name": "toggle-email",
+      "title": "Toggle Dictation — Email",
+      "subtitle": "VoiceType",
+      "description": "Start/stop dictation, auto-formatted into a ready-to-paste email.",
+      "mode": "no-view"
+    },
+    {
       "name": "history",
       "title": "Dictation History",
       "subtitle": "VoiceType",
