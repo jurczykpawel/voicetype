@@ -195,6 +195,13 @@ Bind **Toggle Dictation** to a hotkey in Raycast and grant Raycast Microphone +
 Accessibility permissions. Note: the official Raycast Store requires the MIT license, so
 this extension is distributed here directly (not via the Store).
 
+## Support
+
+VoiceType is free and always will be — no trial, no cloud, no subscription. If it
+saved you from paying for yet another dictation app, you can buy me a coffee:
+
+[![☕ Buy me a coffee](https://img.shields.io/badge/☕_Buy_me_a_coffee-FFDD00)](https://sellf.techskills.academy/checkout/tip-voicetype?utm_source=github&utm_medium=readme&utm_campaign=tip-jar)
+
 ## License
 
 **[PolyForm Noncommercial 1.0.0](LICENSE)** — free for personal and noncommercial use.
