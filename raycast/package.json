@@ -140,6 +140,11 @@
     "prettier": "^3.0.0",
     "typescript": "^5.7.0"
   },
+  "overrides": {
+    "@raycast/api": {
+      "esbuild": "0.28.2"
+    }
+  },
   "scripts": {
     "sync-engine": "cp ../engine/voice-type.sh assets/voice-type.sh && chmod +x assets/voice-type.sh",
     "build": "npm run sync-engine && ray build",
